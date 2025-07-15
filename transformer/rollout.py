@@ -2,7 +2,6 @@ import numpy as np
 import torch
 import gymnasium as gym
 from models import CNNEncoder, LinearEncoder
-from datasets import DataLoader
 import math
 
 
@@ -15,13 +14,15 @@ import math
 
 
 class DataRollout:
-    def __init__(self, env, **config):
+    def __init__(self, env, action_dim, **config):
         self.debug = False
 
         self.env = env
         self.total_trajectories = config.get('total_trajectories', 1000)
         self.max_steps = 500
         self.gamma = 0.9 # reward discounting
+
+        self.action_dim = action_dim
     
     def rollout(self):
         """"
@@ -57,7 +58,7 @@ class DataRollout:
         state, _ = self.env.reset()
 
         for t in range(self.max_steps):
-            action = np.random.uniform(low=self.action_min, high=self.action_max, size=self.action_dim).tolist()
+            action = np.random.choice(self.action_dim)
             next_state, reward, terminated, truncated, _ = self.env.step(action)
 
             state_actions.append([state, action])
@@ -74,8 +75,7 @@ class DataRollout:
         discounted_rew = 0
         for rew in reversed(rewards):
             discounted_rew = rew + discounted_rew * self.gamma
-            rew_emb = self.rtg_encoder(torch.tensor(discounted_rew))
-            rtgs.append(rew_emb)
+            rtgs.append(discounted_rew)
         rtgs = list(reversed(rtgs))
 
         # Add sinusoidal positional encodings

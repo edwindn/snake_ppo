@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from transformers import GPT2Model, GPT2LMHeadModel
+from transformers import GPT2Model, GPT2LMHeadModel, GPT2Config
 
 
 class GPT(GPT2Model):
@@ -9,48 +9,51 @@ class GPT(GPT2Model):
 
     def forward(
             self,
-            inputs_embeds,
-            # attention mask, etc.
+            inputs_embeds=None,
+            attention_mask=None,
+            **kwargs,
     ):
         output = super().forward(
-            input_ids=None,
             inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            **kwargs
         )
         return output.last_hidden_state
-    
-    def predict_action(self):
-        pass
 
 
 class DecisionTransformer(nn.Module):
-    def __init__(self, env, device, model_name="gpt2"):
+    def __init__(self, env, action_dim, state_dim, device, model_name="gpt2"):
         super().__init__()
 
         self.device = device
         self.env = env
-        action_dim = env.action_space.shape[0]
-        state_dim = env.observation_space.shape[0]
 
         embedding_dim = 768  # gpt2 hidden size
+        self.embedding_dim = embedding_dim
 
         self.state_encoder = LinearEncoder(state_dim, embedding_dim)
         self.action_encoder = LinearEncoder(action_dim, embedding_dim)
         self.rtg_encoder = LinearEncoder(1, embedding_dim)
-
+        self.timestep_encoder = LinearEncoder(1, embedding_dim)
+        
+        # config = GPT2Config.from_pretrained(model_name)
+        # self.transformer = GPT(config)
+        # self.transformer.load_state_dict(GPT2Model.from_pretrained(model_name).state_dict())
         self.transformer = GPT.from_pretrained(model_name)
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
-        self.loss_fn = nn.CrossEntropyLoss()
 
         self.return_head = LinearEncoder(embedding_dim, 1)
         self.state_head = LinearEncoder(embedding_dim, state_dim)
         self.action_head = LinearEncoder(embedding_dim, action_dim)
 
     def _embed_sequence(self, states, actions, rtgs, timesteps):
-        timestep_embs = self.timestep_encoder(timesteps.unsqueeze(-1))  # (seq_len, encoding_dim)
-        
-        state_embs = self.state_encoder(states) + timestep_embs  # (seq_len, encoding_dim)
-        action_embs = self.action_encoder(actions) + timestep_embs  # (seq_len, encoding_dim)
-        rtg_embs = self.rtg_encoder(rtgs.unsqueeze(-1)) + timestep_embs  # (seq_len, encoding_dim)
+        # timestep_embs = self.timestep_encoder(timesteps.unsqueeze(-1))  # (seq_len, encoding_dim)
+        state_embs = self.state_encoder(states)
+        action_embs = self.action_encoder(actions)
+        rtg_embs = self.rtg_encoder(rtgs.unsqueeze(-1))
+
+        state_embs = state_embs + timesteps  # (seq_len, encoding_dim)
+        action_embs = action_embs + timesteps  # (seq_len, encoding_dim)
+        rtg_embs = rtg_embs + timesteps  # (seq_len, encoding_dim)
 
         # sequence = torch.stack([rtg_embs, state_embs, action_embs, timestep_embs], dim=1).view(-1, self.encoding_dim)
         return state_embs, action_embs, rtg_embs
@@ -60,7 +63,7 @@ class DecisionTransformer(nn.Module):
 
         state_embs, action_embs, rtg_embs = self._embed_sequence(states, actions, rtgs, timesteps)
         inputs_embeds = torch.cat([rtg_embs, state_embs, action_embs], dim=1)
-        output = self.transformer(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
+        output = self.transformer(inputs_embeds=inputs_embeds)
 
         output = output.reshape(batch_size, seq_len, 3, self.hidden_size).permute(0, 2, 1, 3) # check this
 
