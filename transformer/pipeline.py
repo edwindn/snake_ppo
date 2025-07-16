@@ -262,9 +262,9 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     config = {
-        'batch_size': 32,
+        'batch_size': 128,
         'debug': False,
-        'total_trajectories': 32 * 128,
+        'total_trajectories': 128 * 128,
         'max_steps': 500,
         'total_training_runs': 10,
         'save_dir': 'model_checkpoints',
