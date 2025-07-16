@@ -9,8 +9,9 @@ class GPT(GPT2Model):
 
     def forward(
             self,
-            inputs_embeds=None,
+            input_ids=None,
             attention_mask=None,
+            inputs_embeds=None,
             **kwargs,
     ):
         output = super().forward(
@@ -22,13 +23,11 @@ class GPT(GPT2Model):
 
 
 class DecisionTransformer(nn.Module):
-    def __init__(self, env, action_dim, state_dim, device, model_name="gpt2"):
+    def __init__(self, action_dim, state_dim, device, embedding_dim=768, model_name="gpt2"):
         super().__init__()
 
+        self.debug = False
         self.device = device
-        self.env = env
-
-        embedding_dim = 768  # gpt2 hidden size
         self.embedding_dim = embedding_dim
 
         self.state_encoder = LinearEncoder(state_dim, embedding_dim)
@@ -46,7 +45,6 @@ class DecisionTransformer(nn.Module):
         self.action_head = LinearEncoder(embedding_dim, action_dim)
 
     def _embed_sequence(self, states, actions, rtgs, timesteps):
-        # timestep_embs = self.timestep_encoder(timesteps.unsqueeze(-1))  # (seq_len, encoding_dim)
         state_embs = self.state_encoder(states)
         action_embs = self.action_encoder(actions)
         rtg_embs = self.rtg_encoder(rtgs.unsqueeze(-1))
@@ -55,7 +53,6 @@ class DecisionTransformer(nn.Module):
         action_embs = action_embs + timesteps  # (seq_len, encoding_dim)
         rtg_embs = rtg_embs + timesteps  # (seq_len, encoding_dim)
 
-        # sequence = torch.stack([rtg_embs, state_embs, action_embs, timestep_embs], dim=1).view(-1, self.encoding_dim)
         return state_embs, action_embs, rtg_embs
 
     def forward(self, states, actions, rtgs, timesteps, attention_mask=None):
@@ -65,25 +62,62 @@ class DecisionTransformer(nn.Module):
         inputs_embeds = torch.cat([rtg_embs, state_embs, action_embs], dim=1)
         output = self.transformer(inputs_embeds=inputs_embeds)
 
-        output = output.reshape(batch_size, seq_len, 3, self.hidden_size).permute(0, 2, 1, 3) # check this
+        if self.debug:
+            print(f'Output shape: {output.shape}')
+            print(output.squeeze(0)[:,0].tolist())
 
-        return_preds = self.return_head(output[:,2]) # predict given state and action
-        state_preds = self.state_head(output[:,2]) # predict given state and action
-        action_preds = self.action_head(output[:,1]) # predict given state
+        # output = output.reshape(batch_size, seq_len, 3, self.embedding_dim).permute(0, 2, 1, 3) # check this
 
-        return return_preds, state_preds, action_preds
+        # return_preds = self.return_head(output[:,2]) # predict given state and action
+        # state_preds = self.state_head(output[:,2]) # predict given state and action
+        # action_preds = self.action_head(output[:,1]) # predict given state
 
-        seq_len = states.size(0)
-        action_positions = torch.arange(2, 3*seq_len, 3, device=self.device)
-        action_hidden = output[action_positions]
+        # return return_preds, state_preds, action_preds
 
-        action_logits = self.action_head(action_hidden)
+        action_output = output[:, 2::3, :]
+
+        if self.debug:
+            print(f'Action output shape: {action_output.shape}')
+            print(action_output.squeeze(0)[:,0].tolist())
+
+        action_logits = self.action_head(action_output)
+
+        if self.debug:
+            print(f'Action logits shape: {action_logits.shape}') # B, T, action_dim
+            quit()
         return action_logits
-    
-    def get_action(self, states, actions, rtgs, timesteps, **kwargs):
+
+
+    def predict_action(self, states, actions, rtgs, timesteps, **kwargs):
+        """
+        We assume history contains interleaved tokens, ending with a state
+        i.e. r0, s0, a0, ..., rt, st
+        """
         
-        _, action_preds, _ = self.forward(states, actions, rtgs, timesteps)
-        return action_preds
+        # b, _ = states.size()
+        # last_action = torch.zeros((b, 1), device=self.device)
+        # actions = torch.cat([actions, last_action], dim=1)
+
+        # rtgs = history[:, 0::3, :]
+        # states = history[:, 1::3, :]
+        # actions = history[:, 2::3, :]
+
+        state_embs, action_embs, rtg_embs = self._embed_sequence(states, actions, rtgs, timesteps)
+        inputs_embeds = torch.cat([rtg_embs, state_embs, action_embs], dim=1)
+        output = self.transformer(inputs_embeds=inputs_embeds)
+        
+        last_action = output[:, -1, :]
+        action_logits = self.action_head(last_action)
+        return action_logits
+
+    def save_model(self, path: str = "model.pth"):
+        torch.save(self.state_dict(), path)
+        print(f"Model saved to {path}")
+
+    def load_model(self, path: str = "model.pth"):
+        self.load_state_dict(torch.load(path, map_location=self.device))
+        self.eval()
+        print(f"Model loaded from {path}")
 
 
 
