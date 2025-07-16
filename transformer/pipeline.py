@@ -5,6 +5,7 @@ import gymnasium as gym
 from gymnasium.wrappers import RecordVideo
 import math
 from tqdm import tqdm
+import os
 
 from models import DecisionTransformer
 
@@ -20,10 +21,11 @@ from models import DecisionTransformer
 
 
 class Trainer:
-    def __init__(self, env, device, model, **config):
+    def __init__(self, env, device, model, eval_env=None, **config):
         self.env = env
         self.device = device
         self.model = model
+        self.eval_env = eval_env
         self.optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
         self.batch_size = config.get('batch_size')
@@ -172,13 +174,18 @@ class Trainer:
         return trajectory
 
     def test_run(self, save_video=True, video_folder: str="cartpole_videos"):
+        if self.eval_env is None:
+            print("No evaluation environment provided, skipping test run.")
+            return
+
         states = []
         actions = []
         rewards = []
 
         # Create a new evaluation environment and wrap it for video recording
-        eval_env = gym.make(self.env.spec.id, render_mode="rgb_array")
+        
         if save_video:
+            # assuming that eval_env is a gym environment and we can wrap it in the recordVideo class, will fix later
             eval_env = RecordVideo(eval_env, video_folder=video_folder, episode_trigger=lambda x: True)
             print(f"Recording video to {video_folder}")
 
@@ -217,33 +224,48 @@ class Trainer:
 
 
 if __name__ == "__main__":
-    is_cuda = torch.cuda.is_available()
-    print(f"CUDA available: {is_cuda}")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    env = gym.make('CartPole-v1')
 
     config = {
         'batch_size': 32,
         'debug': False,
         'total_trajectories': 1000,
         'max_steps': 500,
+        'total_training_runs': 10,
+        'save_dir': 'model_checkpoints',
+        'logging': True,
+
         'gamma': 0.9,  # reward discounting
         'action_dim': 2, # for cart pole, need some modifications for continuous action space
         'reward_type': 'always_maximal',  # 'always_maximal' or 'actual'
     }
- 
+
+    os.makedirs(config['save_dir'], exist_ok=True)
+    
+    gym_environment = 'CartPole-v1'
+    env = gym.make(gym_environment)
     state_dim = env.observation_space.shape[0]
+    eval_env = gym.make(gym_environment, render_mode="rgb_array")
 
     model = DecisionTransformer(config['action_dim'], state_dim, device=device)
     model.to(device)
 
     print("Starting training...")
-    trainer = Trainer(env, device, model, **config)
-
+    trainer = Trainer(env, device, model, eval_env, **config)
+    trainer.model.train()
+    trainer.train_iteration(num_steps=1000, rollout_type='random')
+    trainer.model.eval()
     trainer.test_run()
-    quit()
-    trainer.train_iteration(num_steps=1000, rollout_type='expert')
-    trainer.model.save_model("decision_transformer_0.pth")
+    trainer.model.save_model(f"{config['save_dir']}/decision_transformer_0.pth")
 
+    for run in range(config['total_training_runs'] - 1):
+        print(f"--- Training run {run + 1} ---")
+        trainer.model.train()
+        trainer.train_iteration(num_steps=1000, rollout_type='expert')
+        trainer.model.eval()
+        trainer.test_run()
+        trainer.model.save_model(f"{config['save_dir']}/decision_transformer_{run + 1}.pth")
+
+    trainer.model.save_model(f"{config['save_dir']}/decision_transformer_final.pth")
     print("Training complete.")
