@@ -2,18 +2,21 @@ import torch
 import torch.nn as nn
 import numpy as np
 import gymnasium as gym
+from gymnasium.wrappers import RecordVideo
 import math
 from tqdm import tqdm
 
-from rollout import DataRollout
 from models import DecisionTransformer
 
+# on VM: -- conda activate gpu_env
 
 #TODO:
     # train the transformer in batches for speedup
     # allow continous action space
 
     # normalise the values in the trajectory before embedding
+
+    # must find maximal reward for specific environment
 
 
 class Trainer:
@@ -29,13 +32,17 @@ class Trainer:
         self.max_steps = config.get('max_steps')
         self.gamma = config.get('gamma')
         self.action_dim = config.get('action_dim')
+        self.reward_type = config.get('reward_type')
+        assert self.reward_type in ['always_maximal', 'actual'], "Invalid reward type in config, choose 'always_maximal' or 'actual'."
+        if self.reward_type == 'actual':
+            raise NotImplementedError # (yet)
 
         self.max_reward = 1.0 * self.max_steps # placeholder for cartpole rewards per step
         # self.max_reward = 1.0 # if we normalise
 
 
     def train_iteration(self, num_steps, rollout_type):
-        assert rollout_type in ['random', 'expert'], "Invalid rollout type. Choose 'random' or 'expert'."
+        assert rollout_type in ['random', 'expert'], "Invalid rollout type, choose 'random' or 'expert'."
         losses = []
 
         self.model.train()
@@ -120,12 +127,17 @@ class Trainer:
             if rollout_type == 'random':
                 action = np.random.choice(self.action_dim)
                 # action = self.env.action_space.sample()
+
             elif rollout_type == 'expert':
-                rewards = [self.max_reward] * len(states)
+                if self.reward_type == 'actual':
+                    pass
+                elif self.reward_type == 'always_maximal':
+                    rewards_app = [self.max_reward] * len(states)
+
                 actions_app = actions + [0] # dummy action for prediction
 
                 state_input = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
-                reward_input = torch.tensor(rewards, dtype=torch.float32, device=self.device).unsqueeze(0) # should be maximal rtgs
+                reward_input = torch.tensor(rewards_app, dtype=torch.float32, device=self.device).unsqueeze(0) # should be maximal rtgs
                 actions_long = torch.tensor(actions_app, dtype=torch.long, device=self.device).unsqueeze(0)
                 actions_onehot = torch.nn.functional.one_hot(actions_long, num_classes=self.action_dim).float()
 
@@ -159,6 +171,50 @@ class Trainer:
 
         return trajectory
 
+    def test_run(self, save_video=True, video_folder: str="cartpole_videos"):
+        states = []
+        actions = []
+        rewards = []
+
+        # Create a new evaluation environment and wrap it for video recording
+        eval_env = gym.make(self.env.spec.id, render_mode="rgb_array")
+        if save_video:
+            eval_env = RecordVideo(eval_env, video_folder=video_folder, episode_trigger=lambda x: True)
+            print(f"Recording video to {video_folder}")
+
+        state, _ = eval_env.reset()
+        for t in range(self.max_steps):
+            states.append(state)
+
+            if self.reward_type == 'actual':
+                pass
+            elif self.reward_type == 'always_maximal':
+                rewards_app = [self.max_reward] * len(states)
+
+            actions_app = actions + [0] # dummy action for prediction
+
+            state_input = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
+            reward_input = torch.tensor(rewards_app, dtype=torch.float32, device=self.device).unsqueeze(0) # should be maximal rtgs
+            actions_long = torch.tensor(actions_app, dtype=torch.long, device=self.device).unsqueeze(0)
+            actions_onehot = torch.nn.functional.one_hot(actions_long, num_classes=self.action_dim).float()
+            timesteps = self._sinusoidal_timesteps(len(states), self.model.embedding_dim).unsqueeze(0)
+            
+            action_logits = self.model.predict_action(state_input, actions_onehot, reward_input, timesteps)
+            action = torch.argmax(action_logits, dim=-1).item()
+
+            next_state, reward, terminated, truncated, _ = eval_env.step(action)
+
+            actions.append(action)
+            rewards.append(reward)
+
+            done = terminated or truncated
+            if done:
+                break
+
+            state = next_state
+
+        eval_env.close()
+
 
 if __name__ == "__main__":
     is_cuda = torch.cuda.is_available()
@@ -174,6 +230,7 @@ if __name__ == "__main__":
         'max_steps': 500,
         'gamma': 0.9,  # reward discounting
         'action_dim': 2, # for cart pole, need some modifications for continuous action space
+        'reward_type': 'always_maximal',  # 'always_maximal' or 'actual'
     }
  
     state_dim = env.observation_space.shape[0]
@@ -183,6 +240,9 @@ if __name__ == "__main__":
 
     print("Starting training...")
     trainer = Trainer(env, device, model, **config)
+
+    trainer.test_run()
+    quit()
     trainer.train_iteration(num_steps=1000, rollout_type='expert')
     trainer.model.save_model("decision_transformer_0.pth")
 
