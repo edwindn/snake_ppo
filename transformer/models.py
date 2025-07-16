@@ -1,7 +1,16 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import GPT2Model, GPT2LMHeadModel, GPT2Config
 
+class HeuristicPolicy:
+    def __init__(self):
+        pass
+
+    def __call__(self, state):
+        angle = state[2]
+        return 0 if angle < 0 else 1
+        
 
 class GPT(GPT2Model):
     def __init__(self, *args, **kwargs):
@@ -40,8 +49,8 @@ class DecisionTransformer(nn.Module):
         # self.transformer.load_state_dict(GPT2Model.from_pretrained(model_name).state_dict())
         self.transformer = GPT.from_pretrained(model_name)
 
-        self.return_head = LinearEncoder(embedding_dim, 1)
-        self.state_head = LinearEncoder(embedding_dim, state_dim)
+        # self.return_head = LinearEncoder(embedding_dim, 1)
+        # self.state_head = LinearEncoder(embedding_dim, state_dim)
         self.action_head = LinearEncoder(embedding_dim, action_dim)
 
     def _embed_sequence(self, states, actions, rtgs, timesteps):
@@ -85,6 +94,8 @@ class DecisionTransformer(nn.Module):
         if self.debug:
             print(f'Action logits shape: {action_logits.shape}') # B, T, action_dim
             quit()
+
+        # action_probs = F.softmax(action_logits, dim=-1)
         return action_logits
 
 
@@ -108,6 +119,8 @@ class DecisionTransformer(nn.Module):
         
         last_action = output[:, -1, :]
         action_logits = self.action_head(last_action)
+        # action_probs = F.softmax(action_logits, dim=-1)
+
         return action_logits
 
     def save_model(self, path: str = "model.pth"):
@@ -118,7 +131,6 @@ class DecisionTransformer(nn.Module):
         self.load_state_dict(torch.load(path, map_location=self.device))
         self.eval()
         print(f"Model loaded from {path}")
-
 
 
 class CNNEncoder(nn.Module):
