@@ -7,9 +7,10 @@ class HeuristicPolicy:
     def __init__(self):
         pass
 
-    def __call__(self, state):
+    def predict(self, state):
         angle = state[2]
-        return 0 if angle < 0 else 1
+        action = 0 if angle < 0 else 1
+        return action, None
         
 
 class GPT(GPT2Model):

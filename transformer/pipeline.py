@@ -3,6 +3,7 @@ import torch.nn as nn
 import numpy as np
 import gymnasium as gym
 from gymnasium.wrappers import RecordVideo
+from stable_baselines3 import PPO
 import math
 from tqdm import tqdm
 import os
@@ -172,7 +173,9 @@ class Trainer:
             elif rollout_type == 'heuristic':
                 if self.heuristic_actor is None:
                     raise ValueError("Heuristic actor not set for heuristic rollout type.")
-                action = self.heuristic_actor(state)
+                action, _ = self.heuristic_actor.predict(state)
+                if isinstance(action, np.ndarray):
+                    action = action.item()
             
             next_state, reward, terminated, truncated, _ = self.env.step(action)
 
@@ -266,7 +269,7 @@ if __name__ == "__main__":
         'debug': False,
         'total_trajectories': 128 * 128,
         'max_steps': 500,
-        'total_training_runs': 10,
+        'total_training_runs': 50,
         'save_dir': 'model_checkpoints',
         'logging': True,
 
@@ -290,9 +293,13 @@ if __name__ == "__main__":
     state_dim = env.observation_space.shape[0]
     eval_env = gym.make(gym_environment, render_mode="rgb_array")
 
-    heuristic_policy = HeuristicPolicy()
+    # heuristic_policy = HeuristicPolicy()
+    heuristic_policy = PPO.load("ppo_cartpole.zip", device="cpu")
 
     model = DecisionTransformer(config['action_dim'], state_dim, device=device)
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs, setting up data parallel ...")
+        model = torch.nn.DataParallel(model)
     model.to(device)
 
     print("Starting training...")
@@ -300,6 +307,7 @@ if __name__ == "__main__":
 
     trainer.model.train()
     trainer.train_iteration(rollout_type='heuristic')
+    exit() ######
     trainer.model.eval()
     trainer.test_run(run_id=0)
     # trainer.model.save_model(f"{config['save_dir']}/decision_transformer_0.pth")

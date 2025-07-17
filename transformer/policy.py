@@ -1,7 +1,7 @@
 import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.vec_env import SubprocVecEnv, VecVideoRecorder
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecVideoRecorder, DummyVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
 import time
 import os
@@ -57,8 +57,8 @@ class VideoRecorderCallback(BaseCallback):
 def train_ppo():
     # Configuration
     config = {
-        'save_freq': 10000,  # Record video every 1000 steps
-        'total_timesteps': 100000,
+        'save_freq': 20_000,
+        'total_timesteps': 100_000,
         'n_envs': 4,
         'video_length': 200,
         'video_folder': './cartpole_videos/'
@@ -106,19 +106,26 @@ def train_ppo():
     return model
 
 if __name__ == "__main__":
-    # Ensure multiprocessing compatibility
     from multiprocessing import freeze_support
     freeze_support()
     
-    model = train_ppo()
+    # model = train_ppo()
+    model_path = 'ppo_cartpole.zip'
+    model = PPO.load(model_path)
     
     # Test the trained model
-    env = gym.make("CartPole-v1", render_mode="human")
+    video_folder = "./cartpole_videos/"
+    env = gym.make("CartPole-v1", render_mode="rgb_array")
+    env = gym.wrappers.RecordVideo(
+        env,
+        video_folder=video_folder,
+        episode_trigger=lambda ep_id: True,
+        name_prefix="ppo-cartpole-final"
+    )
     obs, _ = env.reset()
     for _ in range(1000):
         action, _ = model.predict(obs, deterministic=True)
-        obs, reward, terminated, truncated, _ = env.step(action)
-        env.render()
+        obs, reward, terminated, truncated, info = env.step(action)
         if terminated or truncated:
             obs, _ = env.reset()
     env.close()
