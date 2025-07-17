@@ -73,6 +73,17 @@ class Trainer:
         pe[:, 1::2] = torch.cos(position * div_term)
         return pe
 
+    def _get_model_attr(self, attr):
+        if isinstance(self.model, torch.nn.DataParallel):
+            return getattr(self.model.module, attr)
+        return getattr(self.model, attr)
+
+    def _set_model_attr(self, attr, value):
+        if isinstance(self.model, torch.nn.DataParallel):
+            setattr(self.model.module, attr, value)
+        else:
+            setattr(self.model, attr, value)
+
     def _normalize_state(self, state):
         # Normalize state to [0, 1]
         return (np.array(state) - self.min_state) / (self.max_state - self.min_state + 1e-8)
@@ -98,14 +109,14 @@ class Trainer:
             trajectories[i] = trajectories[i][:minlen]
         
         batch_rtgs = torch.stack([torch.tensor([step[0] for step in traj], dtype=torch.float32, device=self.device) for traj in trajectories])
-        batch_states = torch.stack([torch.tensor([self._normalize_state(step[1]) for step in traj], dtype=torch.float32, device=self.device) for traj in trajectories])
+        batch_states = torch.stack([torch.tensor(np.array([self._normalize_state(step[1]) for step in traj]), dtype=torch.float32, device=self.device) for traj in trajectories])
         batch_actions = torch.stack([torch.tensor([step[2] for step in traj], dtype=torch.long, device=self.device) for traj in trajectories])
         batch_actions_onehot = torch.nn.functional.one_hot(batch_actions, num_classes=self.action_dim).float()
         batch_rtgs = batch_rtgs / self.max_rtg
         # print(f"Batch shapes: rtgs {batch_rtgs.shape}, states {batch_states.shape}, actions {batch_actions_onehot.shape}")
 
         seq_len = batch_states.shape[1]
-        emb_dim = self.model.embedding_dim
+        emb_dim = self._get_model_attr("embedding_dim")
         timesteps = self._sinusoidal_timesteps(seq_len, emb_dim).unsqueeze(0)
         batch_timesteps = timesteps.repeat(batch_states.shape[0], 1, 1)
 
@@ -144,6 +155,11 @@ class Trainer:
 
         state, _ = self.env.reset()
 
+        # if rollout_type == 'heuristic':
+        #     for t in range(self.max_steps):
+        #         states.append(state)
+        #         action, _ = self.heuristic_actor.predict(state, deterministic=True)
+
         for t in range(self.max_steps):
             states.append(state)
 
@@ -171,9 +187,10 @@ class Trainer:
                 action = torch.argmax(action_logits, dim=-1).item()
             
             elif rollout_type == 'heuristic':
+                # raise NotImplementedError("Does not seem to work within this function")
                 if self.heuristic_actor is None:
                     raise ValueError("Heuristic actor not set for heuristic rollout type.")
-                action, _ = self.heuristic_actor.predict(state)
+                action, _ = self.heuristic_actor.predict(state, deterministic=True)
                 if isinstance(action, np.ndarray):
                     action = action.item()
             
@@ -222,6 +239,8 @@ class Trainer:
         actions = []
         rewards = []
 
+        self.model.eval()
+
         state, _ = eval_env.reset()
         for t in range(self.max_steps):
             states.append(state)
@@ -265,11 +284,11 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     config = {
-        'batch_size': 128,
+        'batch_size': 16,
         'debug': False,
-        'total_trajectories': 128 * 128,
+        'total_trajectories': 16 * 64,
         'max_steps': 500,
-        'total_training_runs': 50,
+        'total_training_runs': 10,
         'save_dir': 'model_checkpoints',
         'logging': True,
 
@@ -293,34 +312,29 @@ if __name__ == "__main__":
     state_dim = env.observation_space.shape[0]
     eval_env = gym.make(gym_environment, render_mode="rgb_array")
 
-    # heuristic_policy = HeuristicPolicy()
+    # heuristic_policy = HeuristicPolicy()
     heuristic_policy = PPO.load("ppo_cartpole.zip", device="cpu")
 
     model = DecisionTransformer(config['action_dim'], state_dim, device=device)
-    if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs, setting up data parallel ...")
-        model = torch.nn.DataParallel(model)
+    # if torch.cuda.device_count() > 1:
+    #     print(f"Using {torch.cuda.device_count()} GPUs, setting up data parallel ...")
+    #     model = torch.nn.DataParallel(model)
     model.to(device)
 
     print("Starting training...")
     trainer = Trainer(env, device, model, eval_env, heuristic_policy, **config)
 
-    trainer.model.train()
     trainer.train_iteration(rollout_type='heuristic')
     exit() ######
-    trainer.model.eval()
     trainer.test_run(run_id=0)
     # trainer.model.save_model(f"{config['save_dir']}/decision_transformer_0.pth")
 
     for run in range(config['total_training_runs'] - 1):
         print(f"--- Training run {run + 1} ---")
-        trainer.model.train()
         trainer.train_iteration(rollout_type='heuristic')
-        trainer.model.eval()
         # trainer.test_run(run_id=run+1)
         # trainer.model.save_model(f"{config['save_dir']}/decision_transformer_{run + 1}.pth")
 
-    trainer.model.train()
     trainer.train_iteration(rollout_type='expert')
 
     # trainer.model.save_model(f"{config['save_dir']}/decision_transformer_final.pth")

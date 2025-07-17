@@ -112,8 +112,7 @@ if __name__ == "__main__":
     # model = train_ppo()
     model_path = 'ppo_cartpole.zip'
     model = PPO.load(model_path)
-    
-    # Test the trained model
+
     video_folder = "./cartpole_videos/"
     env = gym.make("CartPole-v1", render_mode="rgb_array")
     env = gym.wrappers.RecordVideo(
@@ -123,9 +122,11 @@ if __name__ == "__main__":
         name_prefix="ppo-cartpole-final"
     )
     obs, _ = env.reset()
-    for _ in range(1000):
+    for t in range(1000):
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, terminated, truncated, info = env.step(action)
         if terminated or truncated:
             obs, _ = env.reset()
+    print(f"Episode length: {t}")
+
     env.close()
