@@ -1,3 +1,5 @@
+import matplotlib
+matplotlib.use('Agg') # use on Mac
 import matplotlib.pyplot as plt
 import imageio
 from gym_nav2d.envs import Nav2dEnv

@@ -122,20 +122,20 @@ class Nav2dEnv(gym.Env):
             rew) + ", agent pos: (" + str(self.agent_x) + "," + str(self.agent_y) + ")", "goal pos: (" + str(
             self.goal_x) + "," + str(self.goal_y) + "), done: " + str(done)
 
-        return normalized_obs, rew, done, info
+        return normalized_obs, rew, done, {'info': str(info)}
 
     def reset(self):
         self.count_actions = 0
         self.positions = []
         # set initial state randomly
-        # self.agent_x = self.np_random.uniform(low=0, high=self.len_court_x)
-        # self.agent_y = self.np_random.uniform(low=0, high=self.len_court_y)
-        self.agent_x = 10
-        self.agent_y = 240
-        # self.goal_x = self.np_random.uniform(low=0, high=self.len_court_x)
-        # self.goal_y = self.np_random.uniform(low=0, high=self.len_court_x)
-        self.goal_x = 125
-        self.goal_y = 125
+        self.agent_x = self.np_random.uniform(low=0, high=self.len_court_x)
+        self.agent_y = self.np_random.uniform(low=0, high=self.len_court_y)
+        # self.agent_x = 10
+        # self.agent_y = 240
+        self.goal_x = self.np_random.uniform(low=0, high=self.len_court_x)
+        self.goal_y = self.np_random.uniform(low=0, high=self.len_court_x)
+        # self.goal_x = 125
+        # self.goal_y = 125
         if self.goal_y == self.agent_y or self.goal_x == self.agent_x:
             self.reset()
         self.positions.append([self.agent_x, self.agent_y])
