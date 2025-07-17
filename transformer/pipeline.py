@@ -23,7 +23,7 @@ class Trainer:
         self.model = model
         self.eval_env = eval_env
         self.heuristic_actor = heuristic_actor
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=3e-5)
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=config['lr'], betas=(0.9, 0.95), weight_decay=0.01, eps=1e-8)
         self.config = config
 
         if config['save_training_videos']:
@@ -48,7 +48,7 @@ class Trainer:
 
 
     def train_iteration(self, rollout_type):
-        assert rollout_type in ['random', 'expert', 'heuristic'], "Invalid rollout type, choose 'random', 'expert' or 'heuristic'."
+        assert rollout_type in ['random', 'expert', 'heuristic', 'mixed'], "Invalid rollout type"
         losses = []
         episode_lens = []
 
@@ -125,6 +125,7 @@ class Trainer:
         loss = nn.CrossEntropyLoss()(action_preds.view(-1, action_preds.shape[-1]), batch_actions.view(-1))
 
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         return loss.detach().cpu().item(), sum(ts) / len(ts)
@@ -155,11 +156,6 @@ class Trainer:
 
         state, _ = self.env.reset()
 
-        # if rollout_type == 'heuristic':
-        #     for t in range(self.max_steps):
-        #         states.append(state)
-        #         action, _ = self.heuristic_actor.predict(state, deterministic=True)
-
         for t in range(self.max_steps):
             states.append(state)
 
@@ -187,12 +183,16 @@ class Trainer:
                 action = torch.argmax(action_logits, dim=-1).item()
             
             elif rollout_type == 'heuristic':
-                # raise NotImplementedError("Does not seem to work within this function")
                 if self.heuristic_actor is None:
                     raise ValueError("Heuristic actor not set for heuristic rollout type.")
                 action, _ = self.heuristic_actor.predict(state, deterministic=True)
                 if isinstance(action, np.ndarray):
                     action = action.item()
+
+            elif rollout_type == 'mixed':
+                if self.heuristic_actor is None:
+                    raise ValueError("Heuristic actor not set for mixed rollout type.")
+                raise NotImplementedError
             
             next_state, reward, terminated, truncated, _ = self.env.step(action)
 
@@ -284,6 +284,7 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     config = {
+        'lr': 5e-5,
         'batch_size': 16,
         'debug': False,
         'total_trajectories': 16 * 64,
@@ -325,7 +326,6 @@ if __name__ == "__main__":
     trainer = Trainer(env, device, model, eval_env, heuristic_policy, **config)
 
     trainer.train_iteration(rollout_type='heuristic')
-    exit() ######
     trainer.test_run(run_id=0)
     # trainer.model.save_model(f"{config['save_dir']}/decision_transformer_0.pth")
 
@@ -335,7 +335,9 @@ if __name__ == "__main__":
         # trainer.test_run(run_id=run+1)
         # trainer.model.save_model(f"{config['save_dir']}/decision_transformer_{run + 1}.pth")
 
+    trainer.model.save_model(f"{config['save_dir']}/decision_transformer_ppo.pth")
+
+    trainer_train_iteration(rollout_type='mixed')
     trainer.train_iteration(rollout_type='expert')
 
-    # trainer.model.save_model(f"{config['save_dir']}/decision_transformer_final.pth")
     print("Training complete.")
