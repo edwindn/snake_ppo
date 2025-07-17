@@ -130,7 +130,6 @@ class DecisionTransformer(nn.Module):
 
     def load_model(self, path: str = "model.pth"):
         self.load_state_dict(torch.load(path, map_location=self.device))
-        self.eval()
         print(f"Model loaded from {path}")
 
 
