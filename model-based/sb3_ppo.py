@@ -10,16 +10,29 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import BaseCallback
+import torch
+import torch.nn as nn
 
-from gym_nav2d.envs import Nav2dEnv, Nav2dEasyEnv
-choice_env = Nav2dEnv
+from nav_env import NavEnv
 
 # Suppress MoviePy verbose output
 logging.getLogger("moviepy").setLevel(logging.ERROR)
 
-class PolicyNetowkr(nn.Module):
-    def __init__
-    
+class PolicyNetwork(nn.Module):
+    def __init__(self, input_dim, output_dim, hidden_dim=64):
+        super(PolicyNetwork, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
 
 class VideoRecorderCallback(BaseCallback):
     def __init__(self, save_freq: int, video_folder: str, video_length: int, max_videos: int = 5):
@@ -41,34 +54,31 @@ class VideoRecorderCallback(BaseCallback):
             out_path = os.path.join(self.video_folder, f"rollout_{prefix}.mp4")
 
             # Create a fresh evaluation env
-            eval_env = choice_env()
-            obs = eval_env.reset()
+            eval_env = NavEnv()
+            obs, _ = eval_env.reset()
             frames = []
 
             for i in range(self.video_length):
                 action = self.model.predict(obs, deterministic=True)[0]
                 obs, *_ = eval_env.step(action)
 
-                # Custom rendering: get state vector [ax, ay, gx, gy, dist]
-                state = eval_env.render(mode='ansi')
-                state = [s / 255.0 for s in state]
+                state = eval_env.render()
 
-                # Plot into image
                 fig, ax = plt.subplots(figsize=(4, 4))
                 ax.scatter(state[0], state[1], c='blue', label='agent')
                 ax.scatter(state[2], state[3], c='red', label='goal')
                 ax.set_xlim(0, 1)
                 ax.set_ylim(0, 1)
                 ax.legend()
-                ax.set_title(f"Step {i} dist={state[4]:.2f}")
+                ax.set_title(f"Step {i} dist={obs[4]:.2f}")
                 fig.canvas.draw()
-                img = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
-                img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+                img = np.frombuffer(fig.canvas.tostring_argb(), dtype='uint8')
+                img = img.reshape(fig.canvas.get_width_height()[::-1] + (4,))[:, :, 1:]
                 plt.close(fig)
                 frames.append(img)
 
             eval_env.close()
-            # Write out video
+
             imageio.mimwrite(out_path, frames, fps=30)
             print(f"Saved video: {out_path} ({len(frames)} frames)")
             self.videos_saved += 1
@@ -86,7 +96,7 @@ def train_ppo():
     }
 
     # Create vectorized training env
-    train_env = DummyVecEnv([lambda: choice_env() for _ in range(4)])
+    train_env = DummyVecEnv([lambda: NavEnv() for _ in range(4)])
 
     model = PPO(
         policy="MlpPolicy",
@@ -101,16 +111,16 @@ def train_ppo():
         verbose=1
     )
 
-    video_callback = VideoRecorderCallback(
-        save_freq=config['save_freq'],
-        video_folder=config['video_folder'],
-        video_length=config['video_length'],
-        max_videos=5
-    )
+    # video_callback = VideoRecorderCallback(
+    #     save_freq=config['save_freq'],
+    #     video_folder=config['video_folder'],
+    #     video_length=config['video_length'],
+    #     max_videos=5
+    # )
 
     model.learn(
         total_timesteps=config['total_timesteps'],
-        callback=video_callback,
+        # callback=video_callback,
         progress_bar=True
     )
 
@@ -124,34 +134,42 @@ if __name__ == "__main__":
     freeze_support()
     os.makedirs('./nav_videos/', exist_ok=True)
 
+    print('Training ...')
     model = train_ppo()
+    
+    # eval
+    save_runs = 4
+    print(f'Saving {save_runs} eval runs ...')
+    for i in range(save_runs):
+        eval_env = NavEnv()
+        obs, _ = eval_env.reset()
+        frames = []
 
-    # Final evaluation and video
-    eval_env = choice_env()
-    obs = eval_env.reset()
-    frames = []
-    for t in range(1000):
-        action = model.predict(obs, deterministic=True)[0]
-        obs, *_ = eval_env.step(action)
-        state = eval_env.render(mode='ansi')
-        state = [s / 255.0 for s in state]
+        for t in range(1000):
+            action = model.predict(obs, deterministic=True)[0]
+            obs, reward, terminated, truncated, _ = eval_env.step(action)
+            state = eval_env.render()
 
-        fig, ax = plt.subplots(figsize=(4, 4))
-        ax.scatter(state[0], state[1], c='blue', label='agent')
-        ax.scatter(state[2], state[3], c='red', label='goal')
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.legend()
-        ax.set_title(f"Step {t} dist={state[4]:.2f}")
-        fig.canvas.draw()
-        img = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
-        img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-        plt.close(fig)
-        frames.append(img)
-        # optional stop on done
-        # if done: break
+            fig, ax = plt.subplots(figsize=(4, 4))
+            ax.scatter(state[0], state[1], c='blue', label='agent')
+            ax.scatter(state[2], state[3], c='red', label='goal')
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.legend()
+            ax.set_title(f"Step {t} dist={obs[4]:.2f}")
+            fig.canvas.draw()
+            img = np.frombuffer(fig.canvas.tostring_argb(), dtype='uint8')
+            img = img.reshape(fig.canvas.get_width_height()[::-1] + (4,))[:, :, 1:]
+            plt.close(fig)
+            frames.append(img)
 
-    eval_env.close()
-    out_file = './nav_videos/final_rollout.mp4'
-    imageio.mimwrite(out_file, frames, fps=30)
-    print(f"Saved final video: {out_file} ({len(frames)} frames)")
+            if terminated or truncated:
+                print(f"Episode finished after {t+1} steps.")
+                break
+
+        eval_env.close()
+        out_file = f'./nav_videos/final_rollout_{i+1}.mp4'
+        imageio.mimwrite(out_file, frames, fps=30)
+        print(f"Saved final video: {out_file} ({len(frames)} frames)")
+
+    print('Done.')
