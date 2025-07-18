@@ -150,7 +150,7 @@ class Nav2dEnv(gym.Env):
         if mode == 'ansi':
             return self._observation()
         elif mode == 'human':
-            # from gym.envs.classic_control import rendering
+            from gym.envs.classic_control import rendering
             from gym_nav2d.envs.rendering import Viewer, make_circle, make_polyline
 
             if self.viewer is None:

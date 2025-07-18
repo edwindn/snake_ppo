@@ -10,28 +10,34 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import BaseCallback
-from gym_nav2d.envs import Nav2dEnv
+
+from gym_nav2d.envs import Nav2dEnv, Nav2dEasyEnv
+choice_env = Nav2dEnv
 
 # Suppress MoviePy verbose output
 logging.getLogger("moviepy").setLevel(logging.ERROR)
 
 class VideoRecorderCallback(BaseCallback):
-    def __init__(self, save_freq: int, video_folder: str, video_length: int):
+    def __init__(self, save_freq: int, video_folder: str, video_length: int, max_videos: int = 5):
         super(VideoRecorderCallback, self).__init__()
         self.save_freq = save_freq
         self.video_folder = video_folder
         self.video_length = video_length
+        self.max_videos = max_videos
+        self.videos_saved = 0
         self.step_count = 0
         os.makedirs(video_folder, exist_ok=True)
 
     def _on_step(self) -> bool:
+        if self.videos_saved >= self.max_videos:
+            return True
         self.step_count += 1
         if self.step_count % self.save_freq == 0:
             prefix = int(time.time())
             out_path = os.path.join(self.video_folder, f"rollout_{prefix}.mp4")
 
             # Create a fresh evaluation env
-            eval_env = Nav2dEnv()
+            eval_env = choice_env()
             obs = eval_env.reset()
             frames = []
 
@@ -61,19 +67,22 @@ class VideoRecorderCallback(BaseCallback):
             # Write out video
             imageio.mimwrite(out_path, frames, fps=30)
             print(f"Saved video: {out_path} ({len(frames)} frames)")
+            self.videos_saved += 1
         return True
 
 
 def train_ppo():
+    train_timesteps = 100_000
+
     config = {
-        'save_freq': 20000,
-        'total_timesteps': 100000,
+        'save_freq': train_timesteps // 5,  # 5 videos over total_timesteps
+        'total_timesteps': train_timesteps,
         'video_length': 200,
         'video_folder': './nav_videos/'
     }
 
     # Create vectorized training env
-    train_env = DummyVecEnv([lambda: Nav2dEnv() for _ in range(4)])
+    train_env = DummyVecEnv([lambda: choice_env() for _ in range(4)])
 
     model = PPO(
         policy="MlpPolicy",
@@ -91,7 +100,8 @@ def train_ppo():
     video_callback = VideoRecorderCallback(
         save_freq=config['save_freq'],
         video_folder=config['video_folder'],
-        video_length=config['video_length']
+        video_length=config['video_length'],
+        max_videos=5
     )
 
     model.learn(
@@ -113,7 +123,7 @@ if __name__ == "__main__":
     model = train_ppo()
 
     # Final evaluation and video
-    eval_env = Nav2dEnv()
+    eval_env = choice_env()
     obs = eval_env.reset()
     frames = []
     for t in range(1000):
